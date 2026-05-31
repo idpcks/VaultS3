@@ -1280,6 +1280,30 @@ func (h *ObjectHandler) ListObjectVersions(w http.ResponseWriter, r *http.Reques
 }
 
 // ListObjects handles GET /{bucket}?list-type=2.
+// listObjects returns the latest objects for a bucket. For versioned (Enabled
+// or Suspended) buckets, object data is stored under .vs/ and is invisible to
+// the storage engine's filesystem walk, so the metadata store's latest-pointer
+// index is used as the source of truth. Non-versioned buckets use the engine.
+func (h *ObjectHandler) listObjects(bucket, prefix, startAfter string, maxKeys int) ([]storage.ObjectInfo, bool, error) {
+	if v, _ := h.store.GetBucketVersioning(bucket); v == "Enabled" || v == "Suspended" {
+		metas, truncated, err := h.store.ListLatestObjects(bucket, prefix, startAfter, maxKeys)
+		if err != nil {
+			return nil, false, err
+		}
+		objects := make([]storage.ObjectInfo, 0, len(metas))
+		for _, m := range metas {
+			objects = append(objects, storage.ObjectInfo{
+				Key:          m.Key,
+				Size:         m.Size,
+				LastModified: m.LastModified,
+				ETag:         m.ETag,
+			})
+		}
+		return objects, truncated, nil
+	}
+	return h.engine.ListObjects(bucket, prefix, startAfter, maxKeys)
+}
+
 func (h *ObjectHandler) ListObjects(w http.ResponseWriter, r *http.Request, bucket string) {
 	if !h.store.BucketExists(bucket) {
 		writeS3Error(w, "NoSuchBucket", "Bucket does not exist", http.StatusNotFound)
@@ -1296,7 +1320,7 @@ func (h *ObjectHandler) ListObjects(w http.ResponseWriter, r *http.Request, buck
 		}
 	}
 
-	objects, truncated, err := h.engine.ListObjects(bucket, prefix, startAfter, maxKeys)
+	objects, truncated, err := h.listObjects(bucket, prefix, startAfter, maxKeys)
 	if err != nil {
 		slog.Error("internal error", "error", err)
 		writeS3Error(w, "InternalError", "An internal error occurred", http.StatusInternalServerError)
@@ -1362,7 +1386,7 @@ func (h *ObjectHandler) ListObjectsV1(w http.ResponseWriter, r *http.Request, bu
 	}
 
 	// V1 uses marker as start-after
-	objects, truncated, err := h.engine.ListObjects(bucket, prefix, marker, maxKeys)
+	objects, truncated, err := h.listObjects(bucket, prefix, marker, maxKeys)
 	if err != nil {
 		slog.Error("internal error", "error", err)
 		writeS3Error(w, "InternalError", "An internal error occurred", http.StatusInternalServerError)

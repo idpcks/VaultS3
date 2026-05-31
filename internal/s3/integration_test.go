@@ -770,6 +770,77 @@ func TestIntegrationVersioning(t *testing.T) {
 	}
 }
 
+// TestIntegrationVersionedListObjectsV2 reproduces the bug where ListObjectsV2
+// returned an empty result for versioned buckets because object data lives
+// under .vs/ (invisible to the storage engine's filesystem walk). The latest
+// version must be listed via the metadata store.
+func TestIntegrationVersionedListObjectsV2(t *testing.T) {
+	ts := newIntegrationServer(t)
+	bucket := "ver-list-bucket"
+
+	resp := doSigned(t, http.MethodPut, ts.URL+"/"+bucket, nil)
+	resp.Body.Close()
+
+	// Enable versioning from the start.
+	versioningXML := `<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>`
+	resp = doSigned(t, http.MethodPut, ts.URL+"/"+bucket+"?versioning", []byte(versioningXML))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PutBucketVersioning: expected 200, got %d", resp.StatusCode)
+	}
+
+	// Upload an object.
+	resp = doSigned(t, http.MethodPut, ts.URL+"/"+bucket+"/test.pdf", []byte("hello pdf"))
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PutObject: expected 200, got %d", resp.StatusCode)
+	}
+
+	// ListObjectsV2 must return the latest version of the object.
+	resp = doSigned(t, http.MethodGet, ts.URL+"/"+bucket+"?list-type=2", nil)
+	body := readBody(t, resp)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("ListObjectsV2: expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "<Key>test.pdf</Key>") {
+		t.Errorf("ListObjectsV2 on versioned bucket should list test.pdf, got: %s", body)
+	}
+	if !strings.Contains(body, "<KeyCount>1</KeyCount>") {
+		t.Errorf("ListObjectsV2 KeyCount should be 1, got: %s", body)
+	}
+
+	// Upload a new version; listing should still return exactly one key with the
+	// latest size.
+	resp = doSigned(t, http.MethodPut, ts.URL+"/"+bucket+"/test.pdf", []byte("hello pdf v2 longer"))
+	resp.Body.Close()
+
+	resp = doSigned(t, http.MethodGet, ts.URL+"/"+bucket+"?list-type=2", nil)
+	body = readBody(t, resp)
+	if strings.Count(body, "<Key>test.pdf</Key>") != 1 {
+		t.Errorf("ListObjectsV2 should return exactly one entry per key, got: %s", body)
+	}
+	if !strings.Contains(body, "<Size>19</Size>") {
+		t.Errorf("ListObjectsV2 should report latest version size (19), got: %s", body)
+	}
+
+	// After deleting (creating a delete marker), the key must NOT appear in
+	// ListObjectsV2 but must still be visible in ListObjectVersions.
+	resp = doSigned(t, http.MethodDelete, ts.URL+"/"+bucket+"/test.pdf", nil)
+	resp.Body.Close()
+
+	resp = doSigned(t, http.MethodGet, ts.URL+"/"+bucket+"?list-type=2", nil)
+	body = readBody(t, resp)
+	if strings.Contains(body, "<Key>test.pdf</Key>") {
+		t.Errorf("ListObjectsV2 should hide key behind delete marker, got: %s", body)
+	}
+
+	resp = doSigned(t, http.MethodGet, ts.URL+"/"+bucket+"?versions", nil)
+	body = readBody(t, resp)
+	if !strings.Contains(body, "test.pdf") {
+		t.Errorf("ListObjectVersions should still show test.pdf, got: %s", body)
+	}
+}
+
 // --- Batch Delete Tests ---
 
 func TestIntegrationBatchDelete(t *testing.T) {

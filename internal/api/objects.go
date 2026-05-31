@@ -12,7 +12,32 @@ import (
 	"time"
 
 	"github.com/Kodiqa-Solutions/VaultS3/internal/metadata"
+	"github.com/Kodiqa-Solutions/VaultS3/internal/storage"
 )
+
+// listObjects returns the latest objects for a bucket. Versioned (Enabled or
+// Suspended) buckets store data under .vs/, invisible to the engine's
+// filesystem walk, so the metadata store's latest-pointer index is used as the
+// source of truth. Non-versioned buckets use the engine.
+func (h *APIHandler) listObjects(bucket, prefix, startAfter string, maxKeys int) ([]storage.ObjectInfo, bool, error) {
+	if v, _ := h.store.GetBucketVersioning(bucket); v == "Enabled" || v == "Suspended" {
+		metas, truncated, err := h.store.ListLatestObjects(bucket, prefix, startAfter, maxKeys)
+		if err != nil {
+			return nil, false, err
+		}
+		objects := make([]storage.ObjectInfo, 0, len(metas))
+		for _, m := range metas {
+			objects = append(objects, storage.ObjectInfo{
+				Key:          m.Key,
+				Size:         m.Size,
+				LastModified: m.LastModified,
+				ETag:         m.ETag,
+			})
+		}
+		return objects, truncated, nil
+	}
+	return h.engine.ListObjects(bucket, prefix, startAfter, maxKeys)
+}
 
 type objectListItem struct {
 	Key          string `json:"key"`
@@ -49,7 +74,7 @@ func (h *APIHandler) handleListObjects(w http.ResponseWriter, r *http.Request, b
 		}
 	}
 
-	objects, truncated, err := h.engine.ListObjects(bucket, prefix, startAfter, maxKeys)
+	objects, truncated, err := h.listObjects(bucket, prefix, startAfter, maxKeys)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to list objects")
 		return

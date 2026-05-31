@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1055,6 +1056,58 @@ func (s *Store) ListObjectVersions(bucket, prefix, keyMarker, versionMarker stri
 	}
 
 	return versions, truncated, err
+}
+
+// ListLatestObjects returns the latest version of each object in a bucket from
+// the "latest pointer" metadata, filtered by prefix and startAfter and skipping
+// delete markers. This is used by ListObjectsV2/V1 (and the dashboard) for
+// versioned buckets, where the object data lives under .vs/ and is therefore
+// invisible to the filesystem walk in the storage engine's ListObjects.
+func (s *Store) ListLatestObjects(bucket, prefix, startAfter string, maxKeys int) ([]ObjectMeta, bool, error) {
+	var objects []ObjectMeta
+	bucketPrefix := bucket + "/"
+
+	err := s.db.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(objectsBucket)
+		c := b.Cursor()
+		for k, v := c.Seek([]byte(bucketPrefix)); k != nil && strings.HasPrefix(string(k), bucketPrefix); k, v = c.Next() {
+			var meta ObjectMeta
+			if err := json.Unmarshal(v, &meta); err != nil {
+				continue
+			}
+			// Guard against bucket-name aliasing in the shared key space.
+			if meta.Bucket != bucket {
+				continue
+			}
+			// The latest version may be a delete marker — those are not listed.
+			if meta.DeleteMarker {
+				continue
+			}
+			if prefix != "" && !strings.HasPrefix(meta.Key, prefix) {
+				continue
+			}
+			if startAfter != "" && meta.Key <= startAfter {
+				continue
+			}
+			objects = append(objects, meta)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
+	}
+
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].Key < objects[j].Key
+	})
+
+	truncated := false
+	if maxKeys > 0 && len(objects) > maxKeys {
+		objects = objects[:maxKeys]
+		truncated = true
+	}
+
+	return objects, truncated, nil
 }
 
 // SetLatestVersion updates the objects bucket "latest pointer" for a key.
