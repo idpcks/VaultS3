@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/Kodiqa-Solutions/VaultS3/internal/metadata"
@@ -49,13 +50,47 @@ func (h *Healer) Run(ctx context.Context) {
 }
 
 func (h *Healer) scan() {
-	buckets, _ := h.store.ListBuckets()
-	repaired := 0
-	scanned := 0
+	res := h.healScope("", "")
+	if res.Scanned > 0 {
+		slog.Info("erasure healer scan complete", "scanned", res.Scanned, "repaired", res.Repaired)
+	}
+}
 
-	for _, bucket := range buckets {
+// HealResult reports the outcome of an on-demand heal pass.
+type HealResult struct {
+	Scanned  int `json:"scanned"`
+	Repaired int `json:"repaired"`
+}
+
+// Heal runs an on-demand heal pass. An empty bucket scans all buckets; a
+// non-empty prefix restricts the scan to object keys under that prefix.
+func (h *Healer) Heal(bucket, prefix string) HealResult {
+	res := h.healScope(bucket, prefix)
+	slog.Info("erasure manual heal complete",
+		"bucket", bucket, "prefix", prefix,
+		"scanned", res.Scanned, "repaired", res.Repaired,
+	)
+	return res
+}
+
+// healScope scans erasure-coded objects (optionally narrowed to a bucket and/or
+// key prefix) and repairs any degraded ones. It performs no logging itself.
+func (h *Healer) healScope(bucket, prefix string) HealResult {
+	res := HealResult{}
+
+	var bucketNames []string
+	if bucket != "" {
+		bucketNames = []string{bucket}
+	} else {
+		buckets, _ := h.store.ListBuckets()
+		for _, b := range buckets {
+			bucketNames = append(bucketNames, b.Name)
+		}
+	}
+
+	for _, name := range bucketNames {
 		// List .ec/ prefix to find erasure-coded objects
-		objects, _, err := h.engine.inner.ListObjects(bucket.Name, ".ec/", "", 10000)
+		objects, _, err := h.engine.inner.ListObjects(name, ".ec/", "", 10000)
 		if err != nil {
 			continue
 		}
@@ -67,18 +102,19 @@ func (h *Healer) scan() {
 			if key == "" || seen[key] {
 				continue
 			}
+			if prefix != "" && !strings.HasPrefix(key, prefix) {
+				continue
+			}
 			seen[key] = true
-			scanned++
+			res.Scanned++
 
-			if h.healObject(bucket.Name, key) {
-				repaired++
+			if h.healObject(name, key) {
+				res.Repaired++
 			}
 		}
 	}
 
-	if scanned > 0 {
-		slog.Info("erasure healer scan complete", "scanned", scanned, "repaired", repaired)
-	}
+	return res
 }
 
 // healObject checks a single EC object and repairs missing shards.

@@ -9,6 +9,7 @@ import (
 
 	"github.com/Kodiqa-Solutions/VaultS3/internal/backup"
 	"github.com/Kodiqa-Solutions/VaultS3/internal/config"
+	"github.com/Kodiqa-Solutions/VaultS3/internal/erasure"
 	"github.com/Kodiqa-Solutions/VaultS3/internal/lambda"
 	"github.com/Kodiqa-Solutions/VaultS3/internal/metadata"
 	"github.com/Kodiqa-Solutions/VaultS3/internal/metrics"
@@ -31,6 +32,7 @@ type APIHandler struct {
 	searchIndex      *search.Index
 	scanner          *scanner.Scanner
 	tieringMgr       *tiering.Manager
+	ecHealer         *erasure.Healer
 	backupSched      *backup.Scheduler
 	rateLimiter      *ratelimit.Limiter
 	oidc             *OIDCValidator
@@ -80,6 +82,11 @@ func (h *APIHandler) SetTraceBroadcaster(tb *TraceBroadcaster) {
 // SetS3Authenticator sets the S3 authenticator reference for credential updates.
 func (h *APIHandler) SetS3Authenticator(auth *s3auth.Authenticator) {
 	h.s3Auth = auth
+}
+
+// SetHealer sets the erasure-coding healer used by the manual heal endpoint.
+func (h *APIHandler) SetHealer(healer *erasure.Healer) {
+	h.ecHealer = healer
 }
 
 func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -540,6 +540,9 @@ func (s *Server) Run() error {
 	if s.tieringMgr != nil {
 		apiHandler.SetTieringManager(s.tieringMgr)
 	}
+	if s.ecHealer != nil {
+		apiHandler.SetHealer(s.ecHealer)
+	}
 	if s.backupSched != nil {
 		apiHandler.SetBackupScheduler(s.backupSched)
 	}
