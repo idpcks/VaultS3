@@ -6,6 +6,13 @@ semantic-ish versioning via git tags (`vMAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+### Added
+- Test coverage for the remaining seven previously-untested packages, so **every
+  `internal/` package now has tests**: `metrics` (counters + Prometheus output),
+  `lambda` (event/filter matching + key templating), `batch` (bulk delete/copy
+  jobs), `inventory` (CSV report generation), `scanner` (webhook scan + quarantine
+  + fail-closed), `accesslog` (JSON log append), and `dashboard` (SPA routing).
+
 ### Fixed
 - **Tiering deadlock (data-availability bug):** the background tier scan called
   `SetObjectTier` (a write transaction) from inside `IterateAllObjects` (a read
