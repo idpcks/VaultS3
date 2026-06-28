@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -185,6 +186,98 @@ func TestMigrateTestConnection(t *testing.T) {
 	}
 	if len(buckets) != 2 {
 		t.Fatalf("got %d buckets, want 2: %v", len(buckets), buckets)
+	}
+}
+
+// TestMigrateRetriesTransient: a transient 503 on the first GET is retried and
+// the object still copies successfully (issue #6).
+func TestMigrateRetriesTransient(t *testing.T) {
+	var mu sync.Mutex
+	attempts := map[string]int{}
+	data := []byte("payload that survives a flaky first fetch")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Path == "/" {
+			io.WriteString(w, `<ListAllMyBucketsResult><Buckets><Bucket><Name>b</Name></Bucket></Buckets></ListAllMyBucketsResult>`)
+			return
+		}
+		if r.URL.Query().Get("list-type") == "2" {
+			fmt.Fprintf(w, `<ListBucketResult><Contents><Key>flaky.txt</Key><Size>%d</Size></Contents><IsTruncated>false</IsTruncated></ListBucketResult>`, len(data))
+			return
+		}
+		key := strings.TrimPrefix(r.URL.Path, "/b/")
+		mu.Lock()
+		attempts[key]++
+		n := attempts[key]
+		mu.Unlock()
+		if n == 1 {
+			http.Error(w, "slow down", http.StatusServiceUnavailable) // transient
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write(data)
+	}))
+	defer srv.Close()
+
+	store, eng := newLocal(t)
+	m := NewManager(store, eng)
+	id, err := m.Start(StartConfig{Endpoint: srv.URL, AccessKey: "k", SecretKey: "s"})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	job := waitDone(t, m, id)
+
+	if job.Status != "completed" || job.Copied != 1 || job.Failed != 0 {
+		t.Fatalf("after retry: status=%s copied=%d failed=%d, want completed/1/0", job.Status, job.Copied, job.Failed)
+	}
+	mu.Lock()
+	n := attempts["flaky.txt"]
+	mu.Unlock()
+	if n < 2 {
+		t.Fatalf("transient 503 should have been retried (>=2 GETs), got %d", n)
+	}
+	if !eng.ObjectExists("b", "flaky.txt") {
+		t.Fatal("object should exist after successful retry")
+	}
+}
+
+// TestMigratePermanentErrorNotRetried: a 404 is permanent and must NOT be retried.
+func TestMigratePermanentErrorNotRetried(t *testing.T) {
+	var mu sync.Mutex
+	gets := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		if r.URL.Path == "/" {
+			io.WriteString(w, `<ListAllMyBucketsResult><Buckets><Bucket><Name>b</Name></Bucket></Buckets></ListAllMyBucketsResult>`)
+			return
+		}
+		if r.URL.Query().Get("list-type") == "2" {
+			io.WriteString(w, `<ListBucketResult><Contents><Key>gone.txt</Key><Size>5</Size></Contents><IsTruncated>false</IsTruncated></ListBucketResult>`)
+			return
+		}
+		mu.Lock()
+		gets++
+		mu.Unlock()
+		http.Error(w, "not found", http.StatusNotFound) // permanent
+	}))
+	defer srv.Close()
+
+	store, eng := newLocal(t)
+	m := NewManager(store, eng)
+	id, _ := m.Start(StartConfig{Endpoint: srv.URL, AccessKey: "k", SecretKey: "s"})
+	job := waitDone(t, m, id)
+	_ = eng
+
+	if job.Failed != 1 {
+		t.Fatalf("expected 1 failed object (404), got failed=%d", job.Failed)
+	}
+	mu.Lock()
+	n := gets
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("404 must not be retried — expected 1 GET, got %d", n)
 	}
 }
 

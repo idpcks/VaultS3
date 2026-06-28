@@ -6,6 +6,13 @@ semantic-ish versioning via git tags (`vMAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+### Changed
+- **Migration is now streaming + resilient (issue #6).** The migrator streams each
+  object straight from the source into the local engine instead of buffering the
+  whole body in memory (no more OOM risk on large objects), and retries transient
+  source failures (HTTP 5xx / 429 / network errors) with exponential backoff —
+  while leaving permanent errors (4xx) to fail fast. Listing is retried too.
+
 ### Added
 - **Cost estimator** — a dashboard "Cost" page (and `GET /api/v1/tco`) that
   estimates the monthly/yearly cost of your live stored data on AWS S3, Google

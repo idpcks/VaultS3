@@ -1,9 +1,8 @@
 package migrate
 
 import (
-	"bytes"
+	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"sync"
 	"time"
@@ -11,6 +10,46 @@ import (
 	"github.com/Kodiqa-Solutions/VaultS3/internal/metadata"
 	"github.com/Kodiqa-Solutions/VaultS3/internal/storage"
 )
+
+// maxMigrateRetries is how many times a transient source failure is retried
+// (with exponential backoff) before giving up on an object or listing.
+const maxMigrateRetries = 3
+
+// retryable reports whether an error is worth retrying. HTTP 5xx/429 and network
+// or streaming errors are transient; 4xx (and anything explicitly non-retryable)
+// is permanent.
+func retryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	var he interface{ Retryable() bool }
+	if errors.As(err, &he) {
+		return he.Retryable()
+	}
+	return true // network / I/O errors are transient
+}
+
+// withRetry runs fn, retrying transient failures with exponential backoff.
+func withRetry(label string, fn func() error) error {
+	var err error
+	for attempt := 0; attempt <= maxMigrateRetries; attempt++ {
+		if attempt > 0 {
+			d := time.Duration(200*(1<<(attempt-1))) * time.Millisecond // 200ms, 400ms, 800ms
+			if d > 5*time.Second {
+				d = 5 * time.Second
+			}
+			time.Sleep(d)
+			slog.Warn("migrate: retrying after transient error", "op", label, "attempt", attempt, "error", err)
+		}
+		if err = fn(); err == nil {
+			return nil
+		}
+		if !retryable(err) {
+			return err
+		}
+	}
+	return err
+}
 
 // Job tracks the progress of one migration.
 type Job struct {
@@ -99,7 +138,13 @@ func (m *Manager) run(src *Source, job *Job) {
 
 		token := ""
 		for {
-			objs, next, err := src.ListObjects(bucket, token)
+			var objs []ObjectInfo
+			var next string
+			err := withRetry("list "+bucket, func() error {
+				var e error
+				objs, next, e = src.ListObjects(bucket, token)
+				return e
+			})
 			if err != nil {
 				m.setError(job, fmt.Sprintf("list %s: %v", bucket, err))
 				return
@@ -107,8 +152,9 @@ func (m *Manager) run(src *Source, job *Job) {
 			m.bump(job, func(j *Job) { j.Total += len(objs) })
 
 			for _, o := range objs {
-				if err := m.copyOne(src, bucket, o); err != nil {
-					slog.Warn("migrate: copy failed", "bucket", bucket, "key", o.Key, "error", err)
+				o := o
+				if err := withRetry("copy "+bucket+"/"+o.Key, func() error { return m.copyOne(src, bucket, o) }); err != nil {
+					slog.Warn("migrate: copy failed after retries", "bucket", bucket, "key", o.Key, "error", err)
 					m.bump(job, func(j *Job) { j.Failed++ })
 					continue
 				}
@@ -130,16 +176,18 @@ func (m *Manager) run(src *Source, job *Job) {
 }
 
 func (m *Manager) copyOne(src *Source, bucket string, o ObjectInfo) error {
-	body, ct, err := src.GetObject(bucket, o.Key)
+	body, ct, size, err := src.GetObject(bucket, o.Key)
 	if err != nil {
 		return err
 	}
-	data, err := io.ReadAll(body)
-	body.Close()
-	if err != nil {
-		return err
+	defer body.Close()
+
+	if size < 0 { // content length unknown — fall back to the listed size
+		size = o.Size
 	}
-	written, etag, err := m.engine.PutObject(bucket, o.Key, bytes.NewReader(data), int64(len(data)))
+	// Stream straight from the source response into the local engine — no
+	// buffering of the whole object in memory.
+	written, etag, err := m.engine.PutObject(bucket, o.Key, body, size)
 	if err != nil {
 		return err
 	}

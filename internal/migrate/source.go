@@ -117,25 +117,41 @@ func (s *Source) ListObjects(bucket, continuationToken string) (objs []ObjectInf
 	return objs, next, nil
 }
 
-// GetObject fetches an object's body and content type.
-func (s *Source) GetObject(bucket, key string) (io.ReadCloser, string, error) {
+// GetObject opens an object's body for streaming. The caller must Close it.
+// Returns the body, content type, and content length (-1 if unknown).
+func (s *Source) GetObject(bucket, key string) (io.ReadCloser, string, int64, error) {
 	u := &url.URL{Path: "/" + bucket + "/" + key}
 	full := s.endpoint + u.String()
 	req, err := http.NewRequest(http.MethodGet, full, nil)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err
 	}
 	s.sign(req)
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return nil, "", 0, err // network error — retryable
 	}
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, "", fmt.Errorf("source GET %s/%s returned %d: %s", bucket, key, resp.StatusCode, string(raw))
+		return nil, "", 0, &httpError{StatusCode: resp.StatusCode,
+			msg: fmt.Sprintf("source GET %s/%s returned %d: %s", bucket, key, resp.StatusCode, string(raw))}
 	}
-	return resp.Body, resp.Header.Get("Content-Type"), nil
+	return resp.Body, resp.Header.Get("Content-Type"), resp.ContentLength, nil
+}
+
+// httpError carries the HTTP status so the migrator can distinguish transient
+// failures (5xx, 429, and network errors) from permanent ones (4xx).
+type httpError struct {
+	StatusCode int
+	msg        string
+}
+
+func (e *httpError) Error() string { return e.msg }
+
+// Retryable reports whether the failure is worth retrying.
+func (e *httpError) Retryable() bool {
+	return e.StatusCode >= 500 || e.StatusCode == http.StatusTooManyRequests
 }
 
 // get performs a signed GET and returns the body for 2xx, else an error.
@@ -152,7 +168,8 @@ func (s *Source) get(rawURL string) (io.ReadCloser, error) {
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		resp.Body.Close()
-		return nil, fmt.Errorf("source request to %s returned %d: %s", rawURL, resp.StatusCode, string(raw))
+		return nil, &httpError{StatusCode: resp.StatusCode,
+			msg: fmt.Sprintf("source request to %s returned %d: %s", rawURL, resp.StatusCode, string(raw))}
 	}
 	return resp.Body, nil
 }
