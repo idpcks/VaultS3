@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VaultS3 — Lightweight S3-Compatible Object Storage</title>
   <meta name="description" content="Self-hosted S3-compatible object storage. Single binary, under 80MB RAM, built-in dashboard, erasure coding, Raft clustering, active-active replication, and built-in semantic / vector (RAG) search. The maintained, lightweight alternative to MinIO.">
-  <meta name="keywords" content="s3, object storage, self-hosted, minio alternative, migrate from minio, minio replacement, golang, dashboard, lightweight, erasure coding, raft clustering, vector search, semantic search, rag, vector database">
+  <meta name="keywords" content="s3, object storage, self-hosted, minio alternative, migrate from minio, minio replacement, golang, dashboard, lightweight, erasure coding, raft clustering, vector search, semantic search, rag, vector database, kubernetes, helm chart, k8s deployment">
   <meta property="og:title" content="VaultS3 — Lightweight S3-Compatible Object Storage">
   <meta property="og:description" content="Single binary, under 80MB RAM, built-in dashboard, erasure coding, clustering, and built-in semantic / vector (RAG) search. The maintained, lightweight alternative to MinIO.">
   <meta property="og:type" content="website">
@@ -1140,7 +1140,9 @@
         &nbsp;&nbsp;<span class="val">eniz1806/vaults3</span><br><br>
         <span class="comment"># S3 API    &rarr; http://localhost:9000</span><br>
         <span class="comment"># Dashboard &rarr; http://localhost:9000/dashboard/</span><br>
-        <span class="comment"># Metrics   &rarr; http://localhost:9000/metrics</span>
+        <span class="comment"># Metrics   &rarr; http://localhost:9000/metrics</span><br><br>
+        <span class="comment"># Or on Kubernetes (Helm chart + plain manifests in deploy/)</span><br>
+        <span class="cmd">helm install</span> <span class="val">vaults3</span> <span class="val">./deploy/helm/vaults3</span> <span class="flag">--create-namespace</span> <span class="flag">-n</span> <span class="val">vaults3</span>
       </div>
       <div class="hero-actions">
         <a href="https://github.com/Kodiqa-Solutions/VaultS3" class="btn btn-primary">

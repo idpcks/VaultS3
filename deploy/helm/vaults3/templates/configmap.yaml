@@ -1,0 +1,11 @@
+{{- if not .Values.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "vaults3.fullname" . }}
+  labels:
+    {{- include "vaults3.labels" . | nindent 4 }}
+data:
+  vaults3.yaml: |
+    {{- .Values.config | nindent 4 }}
+{{- end }}

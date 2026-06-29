@@ -1,0 +1,36 @@
+VaultS3 has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Release.Namespace }}".
+
+1. Wait for the pod to become ready:
+
+   kubectl --namespace {{ .Release.Namespace }} rollout status statefulset/{{ include "vaults3.fullname" . }}
+
+2. Reach the dashboard and S3 endpoint:
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+   http{{ if $.Values.ingress.tls }}s{{ end }}://{{ .host }}/dashboard/
+{{- end }}
+{{- else if eq .Values.service.type "LoadBalancer" }}
+   export SVC_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "vaults3.fullname" . }} -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+   echo "http://$SVC_IP:{{ .Values.service.port }}/dashboard/"
+{{- else }}
+   kubectl --namespace {{ .Release.Namespace }} port-forward svc/{{ include "vaults3.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+   # then open http://localhost:{{ .Values.service.port }}/dashboard/
+{{- end }}
+
+3. Admin credentials:
+
+   Access key:
+     kubectl --namespace {{ .Release.Namespace }} get secret {{ include "vaults3.secretName" . }} -o jsonpath='{.data.access-key}' | base64 -d; echo
+   Secret key:
+     kubectl --namespace {{ .Release.Namespace }} get secret {{ include "vaults3.secretName" . }} -o jsonpath='{.data.secret-key}' | base64 -d; echo
+
+{{- if not .Values.persistence.enabled }}
+
+WARNING: persistence is DISABLED — object data and metadata live in emptyDir and
+are LOST when the pod is rescheduled. Set persistence.enabled=true for real use.
+{{- end }}
+{{- if eq .Values.auth.secretKey "vaults3-secret-change-me" }}
+
+WARNING: you are using the default admin secret key. Override auth.secretKey
+(or set it empty to auto-generate one) before exposing this beyond a test cluster.
+{{- end }}

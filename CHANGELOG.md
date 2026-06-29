@@ -6,6 +6,17 @@ semantic-ish versioning via git tags (`vMAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+## [4.2.18] - 2026-06-29
+### Added
+- **Kubernetes deployment (issue #12).** A Helm chart (`deploy/helm/vaults3/`) and
+  a no-Helm plain-manifest quickstart (`deploy/k8s/quickstart.yaml`). Deploys
+  VaultS3 as a StatefulSet with admin keys from a Secret, `vaults3.yaml` from a
+  ConfigMap, persistent volumes for `/data` and `/metadata`, liveness/readiness
+  probes on `/health` and `/ready`, a non-root securityContext, and opt-in Ingress
+  and Prometheus ServiceMonitor. Validated with `helm lint` + `kubeconform` and
+  deployed end-to-end on a live cluster (StatefulSet rollout, bound PVCs, probes,
+  Secret-injected credentials, and data surviving a pod restart).
+
 ## [4.2.17] - 2026-06-29
 ### Fixed
 - **Objects uploaded or deleted through the web dashboard were never replicated
@@ -281,7 +292,8 @@ semantic-ish versioning via git tags (`vMAJOR.MINOR.PATCH`).
   dashboard, CLI, versioning, WORM, notifications, full-text search, FUSE mount,
   and multi-platform release binaries + Docker images.
 
-[Unreleased]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.17...HEAD
+[Unreleased]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.18...HEAD
+[4.2.18]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.17...v4.2.18
 [4.2.17]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.16...v4.2.17
 [4.2.16]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.15...v4.2.16
 [4.2.15]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.12...v4.2.15

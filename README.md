@@ -573,6 +573,27 @@ All settings can be overridden via environment variables (takes precedence over 
 | `VAULTS3_TLS_KEY` | TLS private key file path | _(disabled)_ |
 | `VAULTS3_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 
+### Kubernetes
+
+Deploy with the bundled **Helm chart** or a single **plain-manifest** quickstart
+(both under [`deploy/`](deploy/)):
+
+```bash
+# Helm (configurable, production-grade)
+helm install vaults3 ./deploy/helm/vaults3 \
+  --namespace vaults3 --create-namespace \
+  --set auth.secretKey="$(openssl rand -hex 20)"
+
+# Or plain manifests (single-node, no Helm)
+kubectl apply -f deploy/k8s/quickstart.yaml
+```
+
+Both deploy a StatefulSet (S3 API + dashboard on port `9000`), admin keys via a
+Secret, `vaults3.yaml` via a ConfigMap, persistent volumes for `/data` and
+`/metadata`, liveness/readiness probes (`/health`, `/ready`), and an optional
+Ingress + Prometheus ServiceMonitor. See [`deploy/README.md`](deploy/README.md)
+and the [chart reference](deploy/helm/vaults3/README.md).
+
 ### Object Versioning
 
 Enable versioning on a bucket to keep multiple versions of objects:

@@ -1,0 +1,176 @@
+# VaultS3 — single-node Kubernetes quickstart (no Helm required).
+#
+#   kubectl apply -f https://raw.githubusercontent.com/Kodiqa-Solutions/VaultS3/main/deploy/k8s/quickstart.yaml
+#
+# This deploys a single-node VaultS3 (S3 API + dashboard) with persistent storage.
+# CHANGE the admin secret key in the Secret below before any real use.
+# For a configurable, production-grade install, prefer the Helm chart in
+# deploy/helm/vaults3/ (see deploy/README.md).
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: vaults3
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vaults3
+  namespace: vaults3
+type: Opaque
+stringData:
+  access-key: "vaults3-admin"
+  secret-key: "vaults3-secret-change-me" # <-- CHANGE THIS
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vaults3
+  namespace: vaults3
+data:
+  vaults3.yaml: |
+    server:
+      address: "0.0.0.0"
+      port: 9000
+      shutdown_timeout_secs: 30
+    storage:
+      data_dir: "/data"
+      metadata_dir: "/metadata"
+    auth:
+      # Overridden at runtime by VAULTS3_ACCESS_KEY / VAULTS3_SECRET_KEY.
+      admin_access_key: "vaults3-admin"
+      admin_secret_key: "vaults3-secret-change-me"
+    rate_limit:
+      enabled: true
+      requests_per_sec: 200
+      burst_size: 400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vaults3
+  namespace: vaults3
+  labels:
+    app.kubernetes.io/name: vaults3
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vaults3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vaults3-headless
+  namespace: vaults3
+  labels:
+    app.kubernetes.io/name: vaults3
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: 9000
+      targetPort: http
+  selector:
+    app.kubernetes.io/name: vaults3
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: vaults3
+  namespace: vaults3
+  labels:
+    app.kubernetes.io/name: vaults3
+spec:
+  replicas: 1
+  serviceName: vaults3-headless
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: vaults3
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: vaults3
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: vaults3
+          image: eniz1806/vaults3:latest
+          imagePullPolicy: IfNotPresent
+          args: ["-config", "/etc/vaults3/vaults3.yaml"]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: http
+              containerPort: 9000
+          env:
+            - name: VAULTS3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vaults3
+                  key: access-key
+            - name: VAULTS3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vaults3
+                  key: secret-key
+            - name: VAULTS3_DATA_DIR
+              value: /data
+            - name: VAULTS3_METADATA_DIR
+              value: /metadata
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/vaults3
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: metadata
+              mountPath: /metadata
+      volumes:
+        - name: config
+          configMap:
+            name: vaults3
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 50Gi
+    - metadata:
+        name: metadata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi

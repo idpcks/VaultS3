@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vaults3.fullname" . }}
+  labels:
+    {{- include "vaults3.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "vaults3.selectorLabels" . | nindent 4 }}
+---
+# Headless service for stable per-pod DNS (required by the StatefulSet).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "vaults3.fullname" . }}-headless
+  labels:
+    {{- include "vaults3.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+  selector:
+    {{- include "vaults3.selectorLabels" . | nindent 4 }}

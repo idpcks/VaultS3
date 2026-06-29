@@ -1,0 +1,160 @@
+# Default values for the VaultS3 Helm chart.
+# This is a YAML-formatted file. Override with `--set key=value` or `-f my-values.yaml`.
+
+# replicaCount: VaultS3 runs as a StatefulSet. Keep this at 1 unless you have
+# configured Raft clustering — multi-node clustering is Beta and needs extra
+# config (see deploy/helm/vaults3/README.md). Each replica gets its own PVCs and
+# is an independent single-node store otherwise.
+replicaCount: 1
+
+image:
+  repository: eniz1806/vaults3
+  # Defaults to the chart's appVersion when empty. Pin to a tag (e.g. "4.2.17")
+  # for reproducible deploys; "latest" follows main.
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Admin credentials. These are injected as VAULTS3_ACCESS_KEY / VAULTS3_SECRET_KEY
+# env vars (which override the config file), so they never live in the ConfigMap.
+auth:
+  accessKey: "vaults3-admin"
+  # CHANGE THIS. Leave empty to auto-generate a random secret on first install
+  # (regenerated only if you don't set it and re-run with --no-hooks off).
+  secretKey: "vaults3-secret-change-me"
+  # Use an existing Secret instead of the chart-managed one. The Secret must
+  # contain keys `access-key` and `secret-key`.
+  existingSecret: ""
+
+# The vaults3.yaml mounted at /etc/vaults3/vaults3.yaml. Data/metadata dirs are
+# forced to the PVC mount paths via env vars regardless of what's set here.
+# Replace wholesale to enable encryption, replication, erasure, etc.
+# Set existingConfigMap to use your own ConfigMap (key: vaults3.yaml) instead.
+existingConfigMap: ""
+config: |
+  server:
+    address: "0.0.0.0"
+    port: 9000
+    shutdown_timeout_secs: 30
+  storage:
+    data_dir: "/data"
+    metadata_dir: "/metadata"
+  auth:
+    # Overridden at runtime by VAULTS3_ACCESS_KEY / VAULTS3_SECRET_KEY (from the Secret).
+    admin_access_key: "vaults3-admin"
+    admin_secret_key: "vaults3-secret-change-me"
+  compression:
+    enabled: false
+  rate_limit:
+    enabled: true
+    requests_per_sec: 200
+    burst_size: 400
+
+service:
+  type: ClusterIP
+  port: 9000
+  # annotations for the ClusterIP service (e.g. for a LoadBalancer)
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # nginx.ingress.kubernetes.io/proxy-body-size: "0"   # allow large object uploads
+  hosts:
+    - host: vaults3.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+    # - secretName: vaults3-tls
+    #   hosts:
+    #     - vaults3.local
+
+# Persistent storage. VaultS3 keeps object data and BoltDB metadata on disk, so
+# persistence should stay enabled for any real use. Each replica gets its own
+# PVCs via volumeClaimTemplates.
+persistence:
+  enabled: true
+  data:
+    size: 50Gi
+    # storageClass: ""        # "" = cluster default; "-" = disable dynamic provisioning
+    accessModes:
+      - ReadWriteOnce
+  metadata:
+    size: 5Gi
+    # storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# Probes hit the public /health (liveness) and /ready (readiness) endpoints.
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 15
+  timeoutSeconds: 5
+  failureThreshold: 3
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 3
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Pod- and container-level security. The image already runs as UID/GID 1000;
+# fsGroup makes the mounted PVCs writable by that user.
+podSecurityContext:
+  fsGroup: 1000
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# Prometheus Operator ServiceMonitor for the /metrics endpoint.
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# PodDisruptionBudget (useful once you run >1 replica).
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+# Extra environment variables (e.g. VAULTS3_LOG_LEVEL, VAULTS3_DOMAIN,
+# VAULTS3_ENCRYPTION_KEY). See the README for the full list.
+extraEnv: []
+  # - name: VAULTS3_LOG_LEVEL
+  #   value: "info"
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+podAnnotations: {}
+podLabels: {}
