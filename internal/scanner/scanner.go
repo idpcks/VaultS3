@@ -127,7 +127,7 @@ func (s *Scanner) RecentResults(limit int) []ScanResult {
 }
 
 // QuarantineList returns objects in the quarantine bucket.
-func (s *Scanner) QuarantineList(store *metadata.Store, engine storage.Engine) []map[string]interface{} {
+func (s *Scanner) QuarantineList(store metadata.StoreAPI, engine storage.Engine) []map[string]interface{} {
 	objects, _, _ := engine.ListObjects(s.quarantineBucket, "", "", 1000)
 	var results []map[string]interface{}
 	for _, obj := range objects {

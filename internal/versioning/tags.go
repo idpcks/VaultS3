@@ -19,10 +19,10 @@ type VersionTag struct {
 
 // TagStore manages version tags using the metadata store.
 type TagStore struct {
-	store *metadata.Store
+	store metadata.StoreAPI
 }
 
-func NewTagStore(store *metadata.Store) *TagStore {
+func NewTagStore(store metadata.StoreAPI) *TagStore {
 	return &TagStore{store: store}
 }
 

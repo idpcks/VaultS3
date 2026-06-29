@@ -27,7 +27,7 @@ import (
 
 // APIHandler serves the dashboard REST API at /api/v1/.
 type APIHandler struct {
-	store            *metadata.Store
+	store            metadata.StoreAPI
 	engine           storage.Engine
 	metrics          *metrics.Collector
 	cfg              *config.Config
@@ -50,6 +50,8 @@ type APIHandler struct {
 	traceBroadcaster *TraceBroadcaster
 	s3Auth           *s3auth.Authenticator
 	onReplication    ReplicationFunc
+	clusterProxy     ClusterProxyFunc                        // proxy a single-object request to its owner (download/delete)
+	clusterOwner     func(bucket, key string) (string, bool) // owner API addr for placement (upload); ("",false) if local
 }
 
 // ReplicationFunc is called after a dashboard-initiated object mutation so the
@@ -57,7 +59,17 @@ type APIHandler struct {
 // uploaded or deleted through the web UI never enqueue replication events.
 type ReplicationFunc func(eventType, bucket, key string, size int64, etag, versionID string)
 
-func NewAPIHandler(store *metadata.Store, engine storage.Engine, mc *metrics.Collector, cfg *config.Config, activity *ActivityLog) *APIHandler {
+// ClusterProxyFunc forwards a single-object request to the node that owns it,
+// returning true if it handled the request.
+type ClusterProxyFunc func(w http.ResponseWriter, r *http.Request, bucket, key string) bool
+
+// SetClusterRouting wires the cluster object-placement hooks (no-op single-node).
+func (h *APIHandler) SetClusterRouting(proxy ClusterProxyFunc, owner func(bucket, key string) (string, bool)) {
+	h.clusterProxy = proxy
+	h.clusterOwner = owner
+}
+
+func NewAPIHandler(store metadata.StoreAPI, engine storage.Engine, mc *metrics.Collector, cfg *config.Config, activity *ActivityLog) *APIHandler {
 	return &APIHandler{
 		store:    store,
 		engine:   engine,

@@ -23,12 +23,12 @@ import (
 type Authenticator struct {
 	adminAccessKey  string
 	adminSecretKey  string
-	store           *metadata.Store
+	store           metadata.StoreAPI
 	globalAllowCIDR []string
 	globalBlockCIDR []string
 }
 
-func NewAuthenticator(accessKey, secretKey string, store *metadata.Store, allowCIDR, blockCIDR []string) *Authenticator {
+func NewAuthenticator(accessKey, secretKey string, store metadata.StoreAPI, allowCIDR, blockCIDR []string) *Authenticator {
 	return &Authenticator{
 		adminAccessKey:  accessKey,
 		adminSecretKey:  secretKey,

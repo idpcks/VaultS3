@@ -38,9 +38,12 @@ kubectl -n vaults3 port-forward svc/vaults3 9000:9000
 | `auth.existingSecret` | `""` | Use your own Secret (keys `access-key`, `secret-key`). |
 | `config` | single-node config | The `vaults3.yaml` mounted at `/etc/vaults3/`. Replace to enable encryption/replication/erasure/etc. |
 | `existingConfigMap` | `""` | Use your own ConfigMap (key `vaults3.yaml`). |
+| `controller.kind` | `StatefulSet` | `StatefulSet` (default; required for clustering/multi-replica) or `Deployment` (single-node, standalone PVCs). |
 | `persistence.enabled` | `true` | Keep enabled for real use. |
 | `persistence.data.size` | `50Gi` | Object-data PVC size. |
+| `persistence.data.existingClaim` | `""` | Mount a pre-existing data PVC (Deployment mode) — e.g. a restored backup. |
 | `persistence.metadata.size` | `5Gi` | Metadata PVC size. |
+| `persistence.metadata.existingClaim` | `""` | Mount a pre-existing metadata PVC (Deployment mode). |
 | `service.type` | `ClusterIP` | Use `LoadBalancer` or an Ingress to expose. |
 | `ingress.enabled` | `false` | Enable + set `hosts` to expose via Ingress. For large uploads set `nginx.ingress.kubernetes.io/proxy-body-size: "0"`. |
 | `serviceMonitor.enabled` | `false` | Prometheus-Operator scraping of `/metrics`. |
@@ -65,13 +68,70 @@ forces these via env vars anyway, so they always land on the PVCs).
 
 ## Clustering (Beta)
 
-Multi-node Raft clustering is experimental. The default chart deploys an
-independent single-node store per replica; running `replicaCount > 1` does **not**
-form a cluster on its own. Cluster bootstrap/join needs additional `cluster:` and
-inter-node port configuration — see
-[`docs/SCALING.md`](https://github.com/Kodiqa-Solutions/VaultS3/blob/main/docs/SCALING.md).
-For production today, prefer a single node with erasure coding for disk
-redundancy.
+Set `cluster.enabled=true` with an **odd `replicaCount` ≥ 3** and the chart
+auto-forms a Raft cluster: pod-0 bootstraps as the initial leader and the other
+pods auto-join it over stable headless-service DNS — no manual bootstrap/join
+steps. Raft state lives on the metadata PVC, and a node re-joins automatically
+after a restart (its identity is the StatefulSet DNS name, not its pod IP).
+
+```bash
+helm install vaults3 ./deploy/helm/vaults3 -n vaults3 --create-namespace \
+  --set cluster.enabled=true --set replicaCount=3 \
+  --set auth.secretKey="$(openssl rand -hex 20)"
+
+# verify the cluster has a leader + all members
+kubectl -n vaults3 exec vaults3-0 -- wget -qO- http://localhost:9000/cluster/status
+```
+
+Metadata writes (buckets, objects, IAM, …) are committed through Raft consensus,
+so all nodes converge — and a write to **any** node works (a write to a follower
+is transparently forwarded to the leader). Reads are served locally.
+
+> **Beta.** Clustering is functional but newer and less battle-tested than
+> single-node + erasure coding. For maximum production durability today, prefer a
+> **single node with erasure coding** (disk redundancy) — validate clustering
+> against your workload before trusting it as the only copy of critical data. See
+[`docs/SCALING.md`](https://github.com/Kodiqa-Solutions/VaultS3/blob/main/docs/SCALING.md)
+for the redundancy trade-offs.
+
+| Cluster value | Default | Description |
+|---|---|---|
+| `cluster.enabled` | `false` | Auto-form a Raft cluster across the replicas (Beta). |
+| `cluster.raftPort` | `9001` | Port for inter-node Raft traffic. |
+
+## Backups & restore
+
+VaultS3 keeps object **data** on `/data` (plain files) and **metadata** in a
+BoltDB file on `/metadata`, and they reference each other.
+
+**Backing up the PVCs** (Velero, k8up, CSI snapshots, …):
+
+- Back up **`/data` and `/metadata` together, from the same point in time.** A
+  snapshot of one paired with a mismatched copy of the other can leave dangling
+  references. Atomic **CSI volume snapshots** are preferable to a live file copy;
+  if you must file-copy, quiescing writes (or a brief downtime) gives the cleanest
+  result. BoltDB is crash-consistent, so a live snapshot is usually recoverable.
+- StatefulSet PVCs (`data-<release>-0`, `metadata-<release>-0`) are backed up by
+  Velero/k8up like any other PVC — clustering is not required to do so.
+
+**Restoring into a known PVC** (the easiest restore workflow): run in
+**Deployment mode** and point the chart at the restored claims:
+
+```bash
+helm install vaults3 ./deploy/helm/vaults3 -n vaults3 \
+  --set controller.kind=Deployment \
+  --set persistence.data.existingClaim=restored-data \
+  --set persistence.metadata.existingClaim=restored-metadata \
+  --set auth.secretKey="$(openssl rand -hex 20)"
+```
+
+In Deployment mode the chart's standalone PVCs carry a `helm.sh/resource-policy:
+keep` annotation, so they survive `helm uninstall` and can be re-attached on
+reinstall.
+
+**App-level alternative:** VaultS3 also has a built-in backup (full/incremental)
+and bucket snapshots, which sidestep the cross-volume-consistency concern — see
+the main README.
 
 ## Uninstall
 

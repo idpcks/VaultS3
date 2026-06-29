@@ -1,12 +1,15 @@
 package cluster
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strings"
 	"sync"
+	"time"
 )
 
 // Proxy handles forwarding S3 requests to the correct node in the cluster
@@ -30,6 +33,76 @@ func NewProxy(ring *HashRing, node *Node, placement PlacementConfig, nodeAddrs m
 		nodeAddrs: nodeAddrs,
 		proxies:   make(map[string]*httputil.ReverseProxy),
 	}
+}
+
+// RunMembershipSync keeps the hash ring and the node-address map in step with the
+// live Raft membership, so data placement is identical on every node. This is
+// what makes auto-clustering work: nodes join dynamically (not via static config),
+// so the ring must follow the cluster, not a fixed peer list. apiPort is the API
+// port every node serves on (Raft addresses carry the raft port, which we swap).
+func (p *Proxy) RunMembershipSync(ctx context.Context, apiPort int) {
+	p.syncMembership(apiPort)
+	t := time.NewTicker(3 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			p.syncMembership(apiPort)
+		}
+	}
+}
+
+func (p *Proxy) syncMembership(apiPort int) {
+	servers, err := p.node.Servers()
+	if err != nil {
+		return
+	}
+	members := make(map[string]string, len(servers))
+	for _, s := range servers {
+		host := string(s.Address)
+		if i := strings.LastIndex(host, ":"); i >= 0 {
+			host = host[:i]
+		}
+		members[string(s.ID)] = fmt.Sprintf("%s:%d", host, apiPort)
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.nodeAddrs = members
+	// Reconcile the ring to exactly the live member set.
+	want := make(map[string]bool, len(members))
+	for id := range members {
+		want[id] = true
+	}
+	for _, id := range p.ring.Nodes() {
+		if !want[id] {
+			p.ring.RemoveNode(id)
+		}
+	}
+	for id := range members {
+		if !p.ring.HasNode(id) {
+			p.ring.AddNode(id)
+		}
+	}
+}
+
+// OwnerAPIAddr returns the API address of the node that owns (bucket, key) when
+// that is NOT this node, so callers can place or fetch the object there. Returns
+// ("", false) when this node is the owner.
+func (p *Proxy) OwnerAPIAddr(bucket, key string) (string, bool) {
+	target := p.ShouldProxy(bucket, key)
+	if target == "" {
+		return "", false
+	}
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	addr, ok := p.nodeAddrs[target]
+	if !ok {
+		return "", false
+	}
+	return addr, true
 }
 
 // ShouldProxy checks if a request for the given bucket/key should be proxied

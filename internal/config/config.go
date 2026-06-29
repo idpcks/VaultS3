@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -80,6 +81,8 @@ type ClusterConfig struct {
 	Peers         []string          `yaml:"peers"`     // Raft peers: "nodeID@host:raftPort"
 	PeerAPIs      map[string]string `yaml:"peer_apis"` // nodeID → "host:apiPort" for proxying
 	Bootstrap     bool              `yaml:"bootstrap"`
+	JoinAddr      string            `yaml:"join_addr"` // API addr of an existing member to auto-join on startup (host:apiPort)
+	Secret        string            `yaml:"secret"`    // shared secret authenticating inter-node endpoints (join/leave/apply)
 	DataDir       string            `yaml:"data_dir"`
 	SnapshotCount int               `yaml:"snapshot_count"`
 	Placement     PlacementConfig   `yaml:"placement"`
@@ -467,6 +470,29 @@ func applyEnvOverrides(cfg *Config) {
 	}
 	if v := os.Getenv("VAULTS3_CLUSTER_DATA_DIR"); v != "" {
 		cfg.Cluster.DataDir = v
+	}
+	// Per-pod cluster wiring (the Helm StatefulSet derives these from the pod
+	// ordinal so node-0 bootstraps and the rest auto-join).
+	if v := os.Getenv("VAULTS3_CLUSTER_ENABLED"); v != "" {
+		cfg.Cluster.Enabled = v == "true" || v == "1"
+	}
+	if v := os.Getenv("VAULTS3_CLUSTER_BOOTSTRAP"); v != "" {
+		cfg.Cluster.Bootstrap = v == "true" || v == "1"
+	}
+	if v := os.Getenv("VAULTS3_CLUSTER_JOIN_ADDR"); v != "" {
+		cfg.Cluster.JoinAddr = v
+	}
+	if v := os.Getenv("VAULTS3_CLUSTER_SECRET"); v != "" {
+		cfg.Cluster.Secret = v
+	}
+	if v := os.Getenv("VAULTS3_CLUSTER_PEERS"); v != "" {
+		var peers []string
+		for _, p := range strings.Split(v, ",") {
+			if p = strings.TrimSpace(p); p != "" {
+				peers = append(peers, p)
+			}
+		}
+		cfg.Cluster.Peers = peers
 	}
 }
 

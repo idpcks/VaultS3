@@ -1,10 +1,19 @@
 # Default values for the VaultS3 Helm chart.
 # This is a YAML-formatted file. Override with `--set key=value` or `-f my-values.yaml`.
 
-# replicaCount: VaultS3 runs as a StatefulSet. Keep this at 1 unless you have
-# configured Raft clustering — multi-node clustering is Beta and needs extra
-# config (see deploy/helm/vaults3/README.md). Each replica gets its own PVCs and
-# is an independent single-node store otherwise.
+# controller.kind selects the workload type:
+#   StatefulSet (default) — stable per-pod identity + PVCs via volumeClaimTemplates;
+#                           REQUIRED for clustering and any multi-replica setup.
+#   Deployment            — single-node only. Mounts standalone PVCs (which may be
+#                           an existing/restored claim, see persistence.*.existingClaim),
+#                           which is handy for backup/restore with Velero, k8up, etc.
+#                           Incompatible with cluster.enabled and replicaCount > 1.
+controller:
+  kind: StatefulSet
+
+# replicaCount: keep at 1 unless you have configured Raft clustering (StatefulSet
+# only; Beta — see README). Each StatefulSet replica gets its own PVCs and is an
+# independent single-node store otherwise.
 replicaCount: 1
 
 image:
@@ -59,6 +68,20 @@ service:
   # annotations for the ClusterIP service (e.g. for a LoadBalancer)
   annotations: {}
 
+# Multi-node Raft clustering (BETA). When enabled, the StatefulSet auto-forms a
+# cluster: pod-0 bootstraps as the initial leader and the other pods auto-join it
+# (no manual bootstrap/join steps), and a pod that restarts with a new IP
+# re-announces itself automatically. Set replicaCount to an ODD number >= 3 for a
+# fault-tolerant quorum (3 tolerates 1 node loss).
+#
+# Metadata writes are replicated across nodes via Raft consensus (a write to any
+# node is forwarded to the leader and committed), so the cluster stays consistent.
+# BETA: functional but newer/less battle-tested than single-node + erasure coding;
+# for maximum production durability prefer a single node with erasure coding.
+cluster:
+  enabled: false
+  raftPort: 9001
+
 ingress:
   enabled: false
   className: ""
@@ -75,17 +98,22 @@ ingress:
     #     - vaults3.local
 
 # Persistent storage. VaultS3 keeps object data and BoltDB metadata on disk, so
-# persistence should stay enabled for any real use. Each replica gets its own
-# PVCs via volumeClaimTemplates.
+# persistence should stay enabled for any real use. StatefulSet mode creates a PVC
+# per replica via volumeClaimTemplates. Deployment mode (controller.kind:
+# Deployment) creates standalone PVCs — or, set existingClaim to mount a PVC you
+# already created (e.g. one restored from a Velero/k8up backup). existingClaim is
+# honoured only in Deployment mode.
 persistence:
   enabled: true
   data:
     size: 50Gi
+    existingClaim: ""         # mount this pre-existing PVC instead of creating one (Deployment mode)
     # storageClass: ""        # "" = cluster default; "-" = disable dynamic provisioning
     accessModes:
       - ReadWriteOnce
   metadata:
     size: 5Gi
+    existingClaim: ""
     # storageClass: ""
     accessModes:
       - ReadWriteOnce

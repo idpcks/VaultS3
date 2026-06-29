@@ -24,6 +24,14 @@ VaultS3 has been deployed as release "{{ .Release.Name }}" in namespace "{{ .Rel
    Secret key:
      kubectl --namespace {{ .Release.Namespace }} get secret {{ include "vaults3.secretName" . }} -o jsonpath='{.data.secret-key}' | base64 -d; echo
 
+{{- if .Values.cluster.enabled }}
+
+Raft clustering (Beta) is ENABLED with {{ .Values.replicaCount }} replicas. Pod-0
+bootstraps and the rest auto-join. Check the cluster has a leader + all members:
+
+   kubectl --namespace {{ .Release.Namespace }} exec {{ include "vaults3.fullname" . }}-0 -- \
+     wget -qO- http://localhost:{{ .Values.service.port }}/cluster/status
+{{- end }}
 {{- if not .Values.persistence.enabled }}
 
 WARNING: persistence is DISABLED — object data and metadata live in emptyDir and

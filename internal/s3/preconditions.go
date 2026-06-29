@@ -63,7 +63,7 @@ func checkGetPreconditions(w http.ResponseWriter, r *http.Request, meta *metadat
 
 // checkPutPreconditions checks If-Match, If-None-Match on PUT for conditional writes.
 // Returns true if response was written (caller should return).
-func checkPutPreconditions(w http.ResponseWriter, r *http.Request, store *metadata.Store, bucket, key string) bool {
+func checkPutPreconditions(w http.ResponseWriter, r *http.Request, store metadata.StoreAPI, bucket, key string) bool {
 	im := r.Header.Get("If-Match")
 	inm := r.Header.Get("If-None-Match")
 	if im == "" && inm == "" {

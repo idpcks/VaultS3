@@ -573,6 +573,21 @@ All settings can be overridden via environment variables (takes precedence over 
 | `VAULTS3_TLS_KEY` | TLS private key file path | _(disabled)_ |
 | `VAULTS3_LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
 
+### Storage requirements
+
+VaultS3 stores each object as a regular **file** under `data_dir` and keeps
+metadata in a **BoltDB** file under `metadata_dir`, so both must point at a
+**mounted filesystem** — not a raw block device. Format the disk first (**XFS
+recommended**; `ext4` also works) and mount it, then point `data_dir` at a
+directory on the mount. This is the same model as MinIO.
+
+- One file per object means a filesystem with plenty of inodes (XFS handles this
+  well). For workloads with millions of tiny objects, enable the experimental
+  [small-file packing](#small-file-packing-experimental) mode to pack them into
+  large volume files and cut per-file overhead.
+- On Kubernetes, a CSI driver like **DirectPV** is a good fit — it formats disks
+  with XFS and presents them as mounted PVCs, which is exactly what VaultS3 wants.
+
 ### Kubernetes
 
 Deploy with the bundled **Helm chart** or a single **plain-manifest** quickstart
@@ -593,6 +608,19 @@ Secret, `vaults3.yaml` via a ConfigMap, persistent volumes for `/data` and
 `/metadata`, liveness/readiness probes (`/health`, `/ready`), and an optional
 Ingress + Prometheus ServiceMonitor. See [`deploy/README.md`](deploy/README.md)
 and the [chart reference](deploy/helm/vaults3/README.md).
+
+The Helm chart can also **auto-form a Raft cluster** (Beta) with
+`--set cluster.enabled=true --set replicaCount=3`: pod-0 bootstraps as leader and
+the others auto-join, with self-healing on pod restart. Metadata writes replicate
+across nodes via Raft consensus (a write to any node is forwarded to the leader),
+so the cluster stays consistent. Clustering is functional but newer than
+single-node + erasure coding, which remains the recommendation for maximum
+production durability.
+
+For backup/restore workflows, the chart also supports a single-node **Deployment**
+mode (`controller.kind=Deployment`) and **existing PVCs**
+(`persistence.data.existingClaim`), so you can mount a claim restored from Velero,
+k8up, or a CSI snapshot — see the [chart reference](deploy/helm/vaults3/README.md#backups--restore).
 
 ### Object Versioning
 

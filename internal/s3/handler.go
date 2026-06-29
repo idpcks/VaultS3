@@ -40,7 +40,7 @@ type ClusterProxyFunc func(w http.ResponseWriter, r *http.Request, bucket, key s
 
 // Handler routes incoming S3 API requests to the appropriate handler.
 type Handler struct {
-	store               *metadata.Store
+	store               metadata.StoreAPI
 	engine              storage.Engine
 	auth                *Authenticator
 	buckets             *BucketHandler
@@ -61,7 +61,7 @@ type Handler struct {
 	clusterProxy        ClusterProxyFunc
 }
 
-func NewHandler(store *metadata.Store, engine storage.Engine, auth *Authenticator, encryptionEnabled bool, domain string, mc *metrics.Collector) *Handler {
+func NewHandler(store metadata.StoreAPI, engine storage.Engine, auth *Authenticator, encryptionEnabled bool, domain string, mc *metrics.Collector) *Handler {
 	h := &Handler{
 		store:             store,
 		engine:            engine,

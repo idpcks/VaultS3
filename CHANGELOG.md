@@ -6,6 +6,49 @@ semantic-ish versioning via git tags (`vMAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+## [4.2.21] - 2026-06-29
+### Added
+- **Helm chart: Deployment mode + existing PVCs for backup/restore (issue #15).**
+  A new `controller.kind` value selects `StatefulSet` (default) or `Deployment`
+  (single-node), and `persistence.data.existingClaim` / `persistence.metadata.existingClaim`
+  let you mount pre-created PVCs — e.g. claims restored from a Velero or k8up
+  backup. Deployment-mode PVCs are annotated `helm.sh/resource-policy: keep` so
+  they survive uninstall. Verified end-to-end on kind: write data → uninstall
+  (PVCs kept) → reinstall with `existingClaim` → data intact. Deployment mode is
+  guarded to single-node (incompatible with `cluster.enabled`/multi-replica).
+- **Helm chart auto-clustering (Beta, issue #12 follow-up).** With
+  `cluster.enabled=true` and `replicaCount>=3`, the StatefulSet now auto-forms a
+  Raft cluster — pod-0 bootstraps as the initial leader and the rest auto-join it,
+  with no manual bootstrap/join steps. A pod that restarts with a new IP
+  re-announces itself automatically (the Raft server ID is the stable pod name;
+  the address is the current pod IP). New `VAULTS3_CLUSTER_ENABLED/BOOTSTRAP/
+  JOIN_ADDR/PEERS` env overrides drive the per-pod config, and a node-initiated
+  `AutoJoin` (retry + leader-redirect) makes pod start order irrelevant.
+- **Cluster metadata is now replicated across nodes via Raft consensus (Beta).**
+  The API and S3 handlers depend on a `metadata.StoreAPI` interface; when
+  clustering is on, the server injects a `DistributedStore` that commits every
+  metadata write (bucket/object/version/IAM/… — all 58 command types) through the
+  Raft log, so all nodes converge. Writes are accepted on **any** node: a write
+  landing on a follower is transparently forwarded to the leader (new
+  `/cluster/apply` endpoint), so there is no "write only to the leader" rule.
+  Reads stay local. The data-placement hash ring tracks **live Raft membership**
+  (it previously only saw statically-configured peers, so auto-clustered nodes
+  placed object data inconsistently); object reads proxy to the owning node across
+  the cluster. **Dashboard** uploads place each file on its hash owner and
+  downloads/deletes proxy to the owner, so the web UI is consistent with the S3
+  path. Inter-node endpoints (`/cluster/join` `/leave` `/apply`) are authenticated
+  with a **shared cluster secret** (the chart reuses the admin secret key).
+  Verified end-to-end on a 3-node kind cluster: bucket create/delete on the leader
+  **and** on a follower (via forwarding) replicate to every node; an object PUT on
+  one node is byte-for-byte readable from another; a dashboard upload on one node
+  is downloadable from another; 60 concurrent writes across all nodes are visible
+  with full integrity from every node; killing the leader elects a new one and
+  writes continue; the recovered node rejoins and catches up to data written while
+  it was down; unauthenticated inter-node calls are rejected.
+  **Beta:** clustering is functional but newer/less battle-tested than single-node
+  + erasure coding — validate against your workload before trusting it as the only
+  copy of critical data.
+
 ## [4.2.20] - 2026-06-29
 ### Security
 - **Rebuilt on the patched Go 1.26.3 toolchain and updated `golang.org/x/*`
@@ -334,7 +377,8 @@ semantic-ish versioning via git tags (`vMAJOR.MINOR.PATCH`).
   dashboard, CLI, versioning, WORM, notifications, full-text search, FUSE mount,
   and multi-platform release binaries + Docker images.
 
-[Unreleased]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.20...HEAD
+[Unreleased]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.21...HEAD
+[4.2.21]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.20...v4.2.21
 [4.2.20]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.19...v4.2.20
 [4.2.19]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.18...v4.2.19
 [4.2.18]: https://github.com/Kodiqa-Solutions/VaultS3/compare/v4.2.17...v4.2.18

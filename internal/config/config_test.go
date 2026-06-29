@@ -172,3 +172,33 @@ compression:
 		t.Error("compression should be enabled")
 	}
 }
+
+func TestApplyEnvOverrides_Cluster(t *testing.T) {
+	for k, v := range map[string]string{
+		"VAULTS3_CLUSTER_ENABLED":   "true",
+		"VAULTS3_CLUSTER_BOOTSTRAP": "1",
+		"VAULTS3_CLUSTER_NODE_ID":   "vaults3-0",
+		"VAULTS3_CLUSTER_BIND_ADDR": "vaults3-0.vaults3-headless",
+		"VAULTS3_CLUSTER_RAFT_PORT": "9001",
+		"VAULTS3_CLUSTER_JOIN_ADDR": "vaults3-0.vaults3-headless:9000",
+		"VAULTS3_CLUSTER_PEERS":     "vaults3-1@h1:9001, vaults3-2@h2:9001",
+	} {
+		t.Setenv(k, v)
+	}
+	cfg := &Config{}
+	applyEnvOverrides(cfg)
+
+	c := cfg.Cluster
+	if !c.Enabled || !c.Bootstrap {
+		t.Fatalf("enabled=%v bootstrap=%v, want both true", c.Enabled, c.Bootstrap)
+	}
+	if c.NodeID != "vaults3-0" || c.BindAddr != "vaults3-0.vaults3-headless" || c.RaftPort != 9001 {
+		t.Fatalf("identity not applied: %+v", c)
+	}
+	if c.JoinAddr != "vaults3-0.vaults3-headless:9000" {
+		t.Fatalf("join_addr = %q", c.JoinAddr)
+	}
+	if len(c.Peers) != 2 || c.Peers[0] != "vaults3-1@h1:9001" || c.Peers[1] != "vaults3-2@h2:9001" {
+		t.Fatalf("peers not parsed/trimmed: %v", c.Peers)
+	}
+}

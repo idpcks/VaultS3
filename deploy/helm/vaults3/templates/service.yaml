@@ -33,5 +33,11 @@ spec:
       port: {{ .Values.service.port }}
       targetPort: http
       protocol: TCP
+    {{- if .Values.cluster.enabled }}
+    - name: raft
+      port: {{ .Values.cluster.raftPort }}
+      targetPort: raft
+      protocol: TCP
+    {{- end }}
   selector:
     {{- include "vaults3.selectorLabels" . | nindent 4 }}

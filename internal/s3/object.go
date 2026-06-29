@@ -22,7 +22,7 @@ import (
 )
 
 type ObjectHandler struct {
-	store             *metadata.Store
+	store             metadata.StoreAPI
 	engine            storage.Engine
 	encryptionEnabled bool
 	onNotification    NotificationFunc

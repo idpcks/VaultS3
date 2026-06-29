@@ -1,0 +1,51 @@
+{{- if and (eq .Values.controller.kind "Deployment") .Values.persistence.enabled }}
+{{- if not .Values.persistence.data.existingClaim }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vaults3.fullname" . }}-data
+  labels:
+    {{- include "vaults3.labels" . | nindent 4 }}
+  # Keep the data PVC if the release is uninstalled, so a reinstall (or restore)
+  # can reattach it. Delete it explicitly to wipe object data.
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.data.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.data.size | quote }}
+  {{- if .Values.persistence.data.storageClass }}
+  {{- if (eq "-" .Values.persistence.data.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.data.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}
+{{- if not .Values.persistence.metadata.existingClaim }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "vaults3.fullname" . }}-metadata
+  labels:
+    {{- include "vaults3.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes:
+    {{- toYaml .Values.persistence.metadata.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.metadata.size | quote }}
+  {{- if .Values.persistence.metadata.storageClass }}
+  {{- if (eq "-" .Values.persistence.metadata.storageClass) }}
+  storageClassName: ""
+  {{- else }}
+  storageClassName: {{ .Values.persistence.metadata.storageClass | quote }}
+  {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

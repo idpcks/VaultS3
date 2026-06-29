@@ -48,7 +48,7 @@ func validateEndpointURL(rawURL string) error {
 }
 
 type BucketHandler struct {
-	store  *metadata.Store
+	store  metadata.StoreAPI
 	engine storage.Engine
 }
 

@@ -1,0 +1,116 @@
+{{- if eq .Values.controller.kind "Deployment" }}
+{{- if .Values.cluster.enabled }}
+{{- fail "controller.kind: Deployment is single-node only and cannot be combined with cluster.enabled. Use controller.kind: StatefulSet for clustering." }}
+{{- end }}
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "controller.kind: Deployment supports a single replica only (RWO PVCs cannot be shared). Set replicaCount: 1, or use controller.kind: StatefulSet." }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "vaults3.fullname" . }}
+  labels:
+    {{- include "vaults3.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # Recreate: never let a new pod start before the old one releases the RWO PVC.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "vaults3.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ .Values.config | toString | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "vaults3.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "vaults3.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: vaults3
+          image: {{ include "vaults3.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          args:
+            - "-config"
+            - "/etc/vaults3/vaults3.yaml"
+          ports:
+            - name: http
+              containerPort: 9000
+              protocol: TCP
+          env:
+            - name: VAULTS3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vaults3.secretName" . }}
+                  key: access-key
+            - name: VAULTS3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "vaults3.secretName" . }}
+                  key: secret-key
+            - name: VAULTS3_DATA_DIR
+              value: /data
+            - name: VAULTS3_METADATA_DIR
+              value: /metadata
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/vaults3
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: metadata
+              mountPath: /metadata
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "vaults3.configMapName" . }}
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        - name: metadata
+          emptyDir: {}
+        {{- else }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.data.existingClaim | default (printf "%s-data" (include "vaults3.fullname" .)) }}
+        - name: metadata
+          persistentVolumeClaim:
+            claimName: {{ .Values.persistence.metadata.existingClaim | default (printf "%s-metadata" (include "vaults3.fullname" .)) }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

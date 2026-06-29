@@ -25,7 +25,7 @@ type DiffResult struct {
 }
 
 // Diff compares two versions of an object.
-func Diff(store *metadata.Store, engine storage.Engine, bucket, key, versionA, versionB string) (*DiffResult, error) {
+func Diff(store metadata.StoreAPI, engine storage.Engine, bucket, key, versionA, versionB string) (*DiffResult, error) {
 	metaA, err := store.GetObjectVersion(bucket, key, versionA)
 	if err != nil {
 		return nil, fmt.Errorf("version %s not found: %w", versionA, err)

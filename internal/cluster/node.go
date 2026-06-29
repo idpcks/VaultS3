@@ -35,7 +35,11 @@ func NewNode(cfg ClusterConfig, metaStore *metadata.Store) (*Node, error) {
 		return nil, fmt.Errorf("cluster: create data dir: %w", err)
 	}
 
-	// Transport
+	// Transport. The Raft *server ID* is the stable NodeID (the StatefulSet pod
+	// name in Kubernetes); the *address* is the current pod IP (set via BindAddr).
+	// hashicorp/raft requires a concrete *net.TCPAddr advertise, so we resolve it —
+	// and AutoJoin re-announces the current address on every boot, so a restart
+	// with a new pod IP self-heals.
 	bindAddr := fmt.Sprintf("%s:%d", cfg.BindAddr, cfg.RaftPort)
 	tcpAddr, err := net.ResolveTCPAddr("tcp", bindAddr)
 	if err != nil {

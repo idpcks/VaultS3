@@ -122,9 +122,13 @@ func (h *APIHandler) handleListObjects(w http.ResponseWriter, r *http.Request, b
 	})
 }
 
-func (h *APIHandler) handleDeleteObject(w http.ResponseWriter, _ *http.Request, bucket, key string) {
+func (h *APIHandler) handleDeleteObject(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if !h.store.BucketExists(bucket) {
 		writeError(w, http.StatusNotFound, "bucket not found")
+		return
+	}
+	// In a cluster, delete the object data on the node that owns it.
+	if h.clusterProxy != nil && h.clusterProxy(w, r, bucket, key) {
 		return
 	}
 
@@ -183,6 +187,10 @@ func (h *APIHandler) getLatestObject(bucket, key string) (io.ReadCloser, int64, 
 func (h *APIHandler) handleDownload(w http.ResponseWriter, r *http.Request, bucket, key string) {
 	if !h.store.BucketExists(bucket) {
 		writeError(w, http.StatusNotFound, "bucket not found")
+		return
+	}
+	// In a cluster, the object's data lives on the node that owns it — fetch from there.
+	if h.clusterProxy != nil && h.clusterProxy(w, r, bucket, key) {
 		return
 	}
 
@@ -251,6 +259,21 @@ func (h *APIHandler) handleUpload(w http.ResponseWriter, r *http.Request, bucket
 					ct = detected
 				} else {
 					ct = "application/octet-stream"
+				}
+			}
+
+			// In a cluster, place each file on the node that owns its key (by hash
+			// ring) so the data lands where an S3 GET will look for it. The owner
+			// stores it and records the metadata (which replicates via Raft).
+			if h.clusterOwner != nil {
+				if ownerAddr, remote := h.clusterOwner(bucket, key); remote {
+					written, err := h.forwardUpload(ownerAddr, bucket, prefix, fh.Filename, ct, file)
+					file.Close()
+					if err != nil {
+						continue
+					}
+					results = append(results, uploadResult{Key: key, Size: written, ContentType: ct})
+					continue
 				}
 			}
 

@@ -9,8 +9,12 @@ import (
 // RaftApplier is the interface the DistributedStore uses to submit writes.
 // Implemented by cluster.Node.
 type RaftApplier interface {
+	// Apply commits a serialized command to the Raft log. Only valid on the leader.
 	Apply(data []byte) error
 	IsLeader() bool
+	// ForwardToLeader sends an already-serialized command to the current leader
+	// to be applied, used when this node is a follower.
+	ForwardToLeader(data []byte) error
 }
 
 // DistributedStore wraps a Store with Raft consensus for writes.
@@ -109,7 +113,13 @@ func (d *DistributedStore) apply(cmdType uint16, payload interface{}) error {
 	if err != nil {
 		return fmt.Errorf("marshal command: %w", err)
 	}
-	return d.raft.Apply(cmdData)
+	// Writes must be committed on the leader. If this node is a follower, forward
+	// the command to the leader rather than failing — so a client can write to
+	// any node in the cluster.
+	if d.raft.IsLeader() {
+		return d.raft.Apply(cmdData)
+	}
+	return d.raft.ForwardToLeader(cmdData)
 }
 
 // --- Bucket operations (override Store methods to go through Raft) ---

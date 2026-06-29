@@ -49,6 +49,7 @@ var Version = "dev"
 type Server struct {
 	cfg             *config.Config
 	store           *metadata.Store
+	metaStore       metadata.StoreAPI
 	engine          storage.Engine
 	s3h             *s3.Handler
 	metrics         *metrics.Collector
@@ -298,8 +299,17 @@ func New(cfg *config.Config) (*Server, error) {
 	// Initialize activity log
 	activityLog := api.NewActivityLog()
 
+	// When clustered, route metadata WRITES through Raft consensus so every node
+	// converges; reads stay local. Single-node uses the store directly. Handlers
+	// depend on the metadata.StoreAPI interface, which both satisfy.
+	var metaStore metadata.StoreAPI = store
+	if clusterNode != nil {
+		metaStore = metadata.NewDistributedStore(store, clusterNode)
+		slog.Info("cluster: metadata writes routed through Raft consensus")
+	}
+
 	// Initialize S3 handler
-	s3h := s3.NewHandler(store, engine, auth, cfg.Encryption.Enabled, cfg.Server.Domain, mc)
+	s3h := s3.NewHandler(metaStore, engine, auth, cfg.Encryption.Enabled, cfg.Server.Domain, mc)
 
 	// Wire cluster proxy into S3 handler (use failover proxy if available)
 	if failoverProxy != nil {
@@ -570,6 +580,7 @@ func New(cfg *config.Config) (*Server, error) {
 	return &Server{
 		cfg:             cfg,
 		store:           store,
+		metaStore:       metaStore,
 		engine:          engine,
 		s3h:             s3h,
 		metrics:         mc,
@@ -603,13 +614,26 @@ func (s *Server) Run() error {
 	addr := s.cfg.ListenAddr()
 
 	// Dashboard API
-	apiHandler := api.NewAPIHandler(s.store, s.engine, s.metrics, s.cfg, s.activity)
+	apiHandler := api.NewAPIHandler(s.metaStore, s.engine, s.metrics, s.cfg, s.activity)
 	apiHandler.SetS3Authenticator(s.s3Auth)
 	apiHandler.SetSearchIndex(s.searchIndex)
 	apiHandler.SetMigrator(migrate.NewManager(s.store, s.engine))
 	apiHandler.SetSnapshotManager(snapshot.NewManager(s.store))
 	if s.replicationFunc != nil {
 		apiHandler.SetReplicationFunc(s.replicationFunc)
+	}
+	// Cluster object routing: dashboard uploads place each file on its hash owner,
+	// and downloads/deletes proxy to the owner — so dashboard data is consistent
+	// with the S3 path across the cluster.
+	if s.failoverProxy != nil && s.clusterProxy != nil {
+		apiHandler.SetClusterRouting(
+			func(w http.ResponseWriter, r *http.Request, bucket, key string) bool {
+				return s.failoverProxy.ForwardWithRetry(w, r, bucket, key)
+			},
+			func(bucket, key string) (string, bool) {
+				return s.clusterProxy.OwnerAPIAddr(bucket, key)
+			},
+		)
 	}
 
 	// Update checker (notifier always; auto-apply only if explicitly enabled).
@@ -692,7 +716,8 @@ func (s *Server) Run() error {
 		mux.HandleFunc("/cluster/status", s.clusterNode.StatusHandler())
 		mux.HandleFunc("/cluster/join", s.clusterNode.JoinHandler())
 		mux.HandleFunc("/cluster/leave", s.clusterNode.LeaveHandler())
-		slog.Info("cluster endpoints registered", "paths", []string{"/cluster/status", "/cluster/join", "/cluster/leave"})
+		mux.HandleFunc("/cluster/apply", s.clusterNode.ApplyHandler())
+		slog.Info("cluster endpoints registered", "paths", []string{"/cluster/status", "/cluster/join", "/cluster/leave", "/cluster/apply"})
 	}
 
 	// Register bidirectional replication sync endpoint
@@ -814,6 +839,29 @@ func (s *Server) Run() error {
 		go s.ecHealer.Run(ecCtx)
 	}
 
+	// Announce this node's current address to the cluster (every node, including
+	// the bootstrap one). Runs in the background, retrying until the leader
+	// accepts — so pod start order doesn't matter and a restart with a new pod IP
+	// self-heals.
+	if s.clusterNode != nil && s.cfg.Cluster.JoinAddr != "" {
+		joinCtx, joinCancel := context.WithCancel(context.Background())
+		defer joinCancel()
+		go s.clusterNode.AutoJoin(joinCtx, s.cfg.Cluster.JoinAddr)
+	}
+
+	// Keep the data-placement ring in sync with live Raft membership. Without
+	// this, auto-clustered nodes (which join dynamically, not via static config)
+	// each see only themselves on the ring and place data inconsistently.
+	if s.clusterProxy != nil {
+		apiPort := s.cfg.Cluster.APIPort
+		if apiPort == 0 {
+			apiPort = s.cfg.Server.Port
+		}
+		syncCtx, syncCancel := context.WithCancel(context.Background())
+		defer syncCancel()
+		go s.clusterProxy.RunMembershipSync(syncCtx, apiPort)
+	}
+
 	// Start backup scheduler if enabled
 	if s.backupSched != nil {
 		backupCtx, backupCancel := context.WithCancel(context.Background())
@@ -831,6 +879,7 @@ func (s *Server) Run() error {
 		interNodeMux.HandleFunc("/cluster/status", s.clusterNode.StatusHandler())
 		interNodeMux.HandleFunc("/cluster/join", s.clusterNode.JoinHandler())
 		interNodeMux.HandleFunc("/cluster/leave", s.clusterNode.LeaveHandler())
+		interNodeMux.HandleFunc("/cluster/apply", s.clusterNode.ApplyHandler())
 		if s.biDirWorker != nil {
 			interNodeMux.HandleFunc("/_replication/sync", s.biDirWorker.HandleSyncRequest)
 		}
