@@ -444,9 +444,15 @@ func TestMigrateRejectsDuplicate(t *testing.T) {
 	// after cancelling the first, a new one is allowed again
 	m.Cancel(id1)
 	waitDone(t, m, id1)
-	if _, err := m.Start(cfg); err != nil {
+	id3, err := m.Start(cfg)
+	if err != nil {
 		t.Fatalf("Start after first finished should be allowed: %v", err)
 	}
+	// Drain the third migration before the test returns; otherwise its background
+	// goroutine keeps writing to the engine's t.TempDir() while RemoveAll runs,
+	// which races as "directory not empty" cleanup failures in CI.
+	m.Cancel(id3)
+	waitDone(t, m, id3)
 }
 
 // TestMigratePreservesMetadata verifies a migration carries over the source's
