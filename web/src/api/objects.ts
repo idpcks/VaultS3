@@ -12,6 +12,7 @@ export interface ObjectListResponse {
   objects: ObjectItem[] | null
   truncated: boolean
   prefix: string
+  nextStartAfter?: string
 }
 
 export interface UploadResult {

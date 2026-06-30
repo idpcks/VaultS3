@@ -12,6 +12,7 @@ type SortField = 'name' | 'size' | 'type' | 'modified'
 type SortDir = 'asc' | 'desc'
 
 const PAGE_SIZE = 50
+const FETCH_SIZE = 1000 // objects pulled from the server per request
 
 export default function FileBrowserPage() {
   const { name: bucket } = useParams<{ name: string }>()
@@ -20,6 +21,9 @@ export default function FileBrowserPage() {
 
   const [objects, setObjects] = useState<ObjectItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [truncated, setTruncated] = useState(false)
+  const [nextCursor, setNextCursor] = useState('')
   const [error, setError] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null)
   const { addToast } = useToast()
@@ -122,8 +126,10 @@ export default function FileBrowserPage() {
     setLoading(true)
     setError('')
     try {
-      const data = await listObjects(bucket, prefix)
+      const data = await listObjects(bucket, prefix, FETCH_SIZE)
       setObjects(data.objects || [])
+      setTruncated(data.truncated)
+      setNextCursor(data.nextStartAfter || '')
       setPage(0)
       setSelectedKeys(new Set())
     } catch (err) {
@@ -132,6 +138,27 @@ export default function FileBrowserPage() {
       setLoading(false)
     }
   }, [bucket, prefix])
+
+  // Pull the next page from the server and append it, de-duplicating folder
+  // roll-ups that can recur when a folder's objects span a page boundary.
+  const loadMore = useCallback(async () => {
+    if (!bucket || !truncated || loadingMore) return
+    setLoadingMore(true)
+    setError('')
+    try {
+      const data = await listObjects(bucket, prefix, FETCH_SIZE, nextCursor)
+      setObjects(prev => {
+        const seen = new Set(prev.map(o => o.key))
+        return [...prev, ...(data.objects || []).filter(o => !seen.has(o.key))]
+      })
+      setTruncated(data.truncated)
+      setNextCursor(data.nextStartAfter || '')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load more objects')
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [bucket, prefix, truncated, nextCursor, loadingMore])
 
   useEffect(() => { fetchObjects() }, [fetchObjects])
 
@@ -546,12 +573,22 @@ export default function FileBrowserPage() {
             </div>
 
             {/* Pagination */}
-            {totalPages > 1 && (
+            {(totalPages > 1 || truncated) && (
               <div className="flex items-center justify-between mt-3 text-sm text-gray-500 dark:text-gray-400">
                 <span>
-                  {sortedObjects.length} items &middot; Page {page + 1} of {totalPages}
+                  {sortedObjects.length}{truncated ? '+' : ''} items
+                  {totalPages > 1 && <> &middot; Page {page + 1} of {totalPages}</>}
                 </span>
                 <div className="flex gap-1">
+                  {truncated && (
+                    <button
+                      onClick={loadMore}
+                      disabled={loadingMore}
+                      className="px-3 py-1.5 rounded-lg border border-indigo-300 dark:border-indigo-700 text-indigo-600 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {loadingMore ? 'Loading…' : `Load ${FETCH_SIZE} more`}
+                    </button>
+                  )}
                   <button
                     onClick={() => setPage(p => Math.max(0, p - 1))}
                     disabled={page === 0}

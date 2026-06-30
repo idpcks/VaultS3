@@ -6,6 +6,21 @@ semantic-ish versioning via git tags (`vMAJOR.MINOR.PATCH`).
 
 ## [Unreleased]
 
+## [4.2.23] - 2026-06-30
+### Fixed
+- **Object browser slow + capped on large buckets (issue #16 follow-up).** Two
+  bugs in the dashboard file browser (`/api/v1/objects`):
+  - *Backend:* for **non-versioned** buckets the listing fell back to a full
+    `filepath.Walk` of the bucket **plus an MD5 hash of every file's contents** on
+    every page request — so browsing a 500k-object bucket took minutes. It now
+    reads the BoltDB metadata index (seek to page, O(pageSize)) like the S3 API
+    already does — ~1.5ms per page regardless of bucket size.
+  - *Frontend:* the browser fetched only the first page and ignored the
+    `truncated`/continuation cursor, so only the first ~200 objects were ever
+    visible. It now pulls 1,000 per request with a **Load more** control (server
+    cursor `nextStartAfter`, folder roll-ups de-duplicated across pages), so the
+    whole bucket is reachable.
+
 ## [4.2.22] - 2026-06-30
 ### Fixed
 - **Slow dashboard pages with large buckets (issue #16).** The Home/Buckets/Stats/

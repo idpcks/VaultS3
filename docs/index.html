@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>VaultS3 — Lightweight S3-Compatible Object Storage</title>
   <meta name="description" content="Self-hosted S3-compatible object storage. Single binary, under 80MB RAM, built-in dashboard, erasure coding, Raft clustering, active-active replication, and built-in semantic / vector (RAG) search. The maintained, lightweight alternative to MinIO.">
-  <meta name="keywords" content="s3, object storage, self-hosted, minio alternative, migrate from minio, minio replacement, golang, dashboard, lightweight, erasure coding, raft clustering, vector search, semantic search, rag, vector database, kubernetes, helm chart, k8s deployment">
+  <meta name="keywords" content="s3, object storage, self-hosted, minio alternative, migrate from minio, minio replacement, golang, dashboard, lightweight, erasure coding, raft clustering, vector search, semantic search, rag, vector database, kubernetes, helm chart, k8s deployment, scalable object storage, millions of objects">
   <meta property="og:title" content="VaultS3 — Lightweight S3-Compatible Object Storage">
   <meta property="og:description" content="Single binary, under 80MB RAM, built-in dashboard, erasure coding, clustering, and built-in semantic / vector (RAG) search. The maintained, lightweight alternative to MinIO.">
   <meta property="og:type" content="website">
@@ -882,6 +882,18 @@
           </div>
           <h3>Small-file Packing <span class="tag beta">Beta</span></h3>
           <p>Pack millions of tiny objects into large append-only volumes (independent zstd frames + a byte-offset index) instead of one file each — no per-file inode/syscall overhead at scale, with background compaction to reclaim space.</p>
+        </div>
+        <div class="feature-card reveal">
+          <div class="feature-icon green">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><path d="M3 3v18h18"/><path d="M7 14l4-4 3 3 5-6"/></svg>
+          </div>
+          <h3>Scales to Millions of Objects</h3>
+          <p>Listing and storage stats come from a sorted metadata index with maintained per-bucket counters — never a filesystem walk. Dashboard stats stay O(1) and the object browser pages in milliseconds, even at 1M+ objects.</p>
+          <div class="chips">
+            <span class="chip">O(1) stats</span>
+            <span class="chip">Indexed listing</span>
+            <span class="chip">1M+ objects</span>
+          </div>
         </div>
       </div>
     </div>

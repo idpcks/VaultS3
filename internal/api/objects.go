@@ -20,23 +20,25 @@ import (
 // filesystem walk, so the metadata store's latest-pointer index is used as the
 // source of truth. Non-versioned buckets use the engine.
 func (h *APIHandler) listObjects(bucket, prefix, startAfter string, maxKeys int) ([]storage.ObjectInfo, bool, error) {
-	if v, _ := h.store.GetBucketVersioning(bucket); v == "Enabled" || v == "Suspended" {
-		metas, truncated, err := h.store.ListLatestObjects(bucket, prefix, startAfter, maxKeys)
-		if err != nil {
-			return nil, false, err
-		}
-		objects := make([]storage.ObjectInfo, 0, len(metas))
-		for _, m := range metas {
-			objects = append(objects, storage.ObjectInfo{
-				Key:          m.Key,
-				Size:         m.Size,
-				LastModified: m.LastModified,
-				ETag:         m.ETag,
-			})
-		}
-		return objects, truncated, nil
+	// All listing goes through the BoltDB metadata index (sorted keys → seek to the
+	// page, O(log n + pageSize)), regardless of versioning. Every write path updates
+	// the store, so it is the authoritative listing source — and this avoids the
+	// O(n) filesystem walk (+ per-file ETag hashing) that made large non-versioned
+	// buckets take minutes to list (issue #16 follow-up). Mirrors the S3 API path.
+	metas, truncated, err := h.store.ListLatestObjects(bucket, prefix, startAfter, maxKeys)
+	if err != nil {
+		return nil, false, err
 	}
-	return h.engine.ListObjects(bucket, prefix, startAfter, maxKeys)
+	objects := make([]storage.ObjectInfo, 0, len(metas))
+	for _, m := range metas {
+		objects = append(objects, storage.ObjectInfo{
+			Key:          m.Key,
+			Size:         m.Size,
+			LastModified: m.LastModified,
+			ETag:         m.ETag,
+		})
+	}
+	return objects, truncated, nil
 }
 
 type objectListItem struct {
@@ -51,6 +53,11 @@ type objectListResponse struct {
 	Objects   []objectListItem `json:"objects"`
 	Truncated bool             `json:"truncated"`
 	Prefix    string           `json:"prefix"`
+	// NextStartAfter is the continuation cursor (the last flat object key in this
+	// page). Pass it back as ?startAfter= to fetch the next page. It is the last
+	// *flat* key rather than the last displayed item, so folder roll-ups don't
+	// corrupt the cursor.
+	NextStartAfter string `json:"nextStartAfter,omitempty"`
 }
 
 type uploadResult struct {
@@ -115,10 +122,15 @@ func (h *APIHandler) handleListObjects(w http.ResponseWriter, r *http.Request, b
 	if items == nil {
 		items = []objectListItem{}
 	}
+	nextStartAfter := ""
+	if truncated && len(objects) > 0 {
+		nextStartAfter = objects[len(objects)-1].Key // last *flat* key, not last rolled-up item
+	}
 	writeJSON(w, http.StatusOK, objectListResponse{
-		Objects:   items,
-		Truncated: truncated,
-		Prefix:    prefix,
+		Objects:        items,
+		Truncated:      truncated,
+		Prefix:         prefix,
+		NextStartAfter: nextStartAfter,
 	})
 }
 
